@@ -1,5 +1,5 @@
 use crate::{
-    correct_exposure, data_path, form_render, form_sensor_noise, form_svbrdf, open_image,
+    correct_exposure, data_path, form_render, form_sensor_noise, form_svbrdf, form_svbrdf_no_crop, open_image,
     search_for_ids, warp, DataId, DatasetConfig, DatasetPath, Sample, SONY_A7S2,
 };
 use anyhow::{anyhow, bail, Error};
@@ -109,6 +109,31 @@ impl Loader for Rasterized {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ImageBRDF {
+    // pub distance: Distr,
+}
+
+impl Loader for ImageBRDF {
+    fn load_sample(
+        &self,
+        root: &DatasetConfig,
+        id: &DataId,
+        rng: &mut StdRng,
+    ) -> Result<Sample, Error> {
+        let svbrdf = form_svbrdf(root, id, rng, Some(root.resolution), |p| p)?;
+        // let distance = self.distance.sample(rng);
+        Ok(Sample::Dict(hash_map! {
+            "svbrdf" => Sample::Image(svbrdf),
+            // "view_distance" => Sample::Scalar(distance),
+            // "flash_distance" => Sample::Scalar(distance),
+            // "flash_x" => Sample::Scalar(0.0),
+            // "flash_y" => Sample::Scalar(0.0),
+        }))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Rendered {
     pub flash_weight: f32,
     pub crop: Option<f32>,
@@ -165,12 +190,16 @@ impl Loader for ImagesAndSVBRDFs {
         id: &DataId,
         rng: &mut StdRng,
     ) -> Result<Sample, Error> {
-        let svbrdf = form_svbrdf(root, id, rng, Some(root.resolution), |p| p)?;
+        let svbrdf = form_svbrdf_no_crop(root, id, rng, Some(root.resolution), |p| p)?;
         let path = data_path(root, id, &crate::Part::Image)?;
         let image = open_image(&path)?;
+        let mut dest = Array3::zeros([root.resolution, root.resolution, 3]);
+        warp::resize(image.view(), dest.view_mut());
+        let mut dest2 = Array3::zeros([root.resolution, root.resolution, 10]);
+        warp::resize(svbrdf.view(), dest2.view_mut());
         Ok(Sample::Dict(hash_map! {
-            "svbrdf" => Sample::Image(svbrdf),
-            "render" => Sample::Image(image),
+            "svbrdf" => Sample::Image(dest2),
+            "render" => Sample::Image(dest),
         }))
     }
 }
@@ -251,6 +280,7 @@ impl Loader for Images {
             } else {
                 warp::resize(input, dest.view_mut());
             }
+            
             Ok((dest, distance))
         };
         let DataId {

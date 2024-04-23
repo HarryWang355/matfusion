@@ -313,6 +313,60 @@ pub fn form_svbrdf(
     Ok(arr)
 }
 
+
+pub fn form_svbrdf_no_crop(
+    root: &DatasetConfig,
+    id: &DataId,
+    rng: &mut impl Rng,
+    resolution: Option<usize>,
+    map_part: impl Fn(Part) -> Part,
+) -> Result<Array3<f32>, Error> {
+    let diffuse;
+    let specular;
+    if root.dirs[id.whichdir.unwrap_or(0)].metalness {
+        let albedo = open_texture(root, id, &map_part(Part::Albedo))?;
+        let metalness = open_texture(root, id, &map_part(Part::Metalness))?;
+        let dielectricness = 1.0 - &metalness;
+        diffuse = albedo.clone() * &dielectricness;
+        specular = albedo.clone() * &metalness + 0.04;
+    } else {
+        diffuse = open_texture(root, id, &map_part(Part::Diffuse))?;
+        specular = open_texture(root, id, &map_part(Part::Specular))?;
+    }
+    let roughness = open_texture(root, id, &map_part(Part::Roughness))?;
+    let normals = if root.normals {
+        Some(open_texture(root, id, &map_part(Part::Normals))?)
+    } else {
+        None
+    };
+    let height = if root.height {
+        let mut height = open_texture(root, id, &map_part(Part::Height))?;
+        height -= *height.iter().choose(rng).unwrap();
+        Some(height)
+    } else {
+        None
+    };
+    let (h, w, _) = diffuse.dim();
+    let mut arr = ndarray::concatenate(
+        Axis(2),
+        &[
+            diffuse.view(),
+            specular.view(),
+            roughness.slice(s![.., .., 0usize..=0]),
+        ],
+    )
+    .with_context(|| format!("combining textures for {id:?}"))?;
+    if let Some(normals) = normals {
+        arr = ndarray::concatenate(Axis(2), &[arr.view(), normals.view()])
+            .with_context(|| format!("combining textures for {id:?}"))?;
+    }
+    if let Some(height) = height {
+        arr = ndarray::concatenate(Axis(2), &[arr.view(), height.view()])
+            .with_context(|| format!("combining textures for {id:?}"))?;
+    }
+    Ok(arr)
+}
+
 /// ==========================================
 /// Based on https://github.com/Vandermode/ELD
 /// ==========================================
